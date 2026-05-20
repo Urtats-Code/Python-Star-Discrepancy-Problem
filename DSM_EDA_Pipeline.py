@@ -53,6 +53,21 @@ class DSM_EDA_Pipeline:
             mat /= (mat.sum(axis=0, keepdims=True) + 1e-15)
         return mat
 
+    def learn_pbil(self, selected_permutations, learning_rate=0.1, mutation_rate=0.01):
+        m = len(selected_permutations)
+        
+        target_matrix = np.zeros((self.n, self.n))
+        rows = np.tile(np.arange(self.n), m)
+        cols = np.array(selected_permutations).flatten() - 1  # 0-indexing
+        
+        np.add.at(target_matrix, (rows, cols), 1.0 / m)
+        
+        self.dsm = (1.0 - learning_rate) * self.dsm + learning_rate * target_matrix
+        
+        if mutation_rate > 0:
+            uniform_matrix = 1.0 / self.n
+            self.dsm = (1.0 - mutation_rate) * self.dsm + mutation_rate * uniform_matrix
+
     def learn(self, selected_permutations, alpha=0.1):
         m = len(selected_permutations)
         
@@ -101,7 +116,7 @@ class DSM_EDA_Pipeline:
                 
                 # 3. Learning & Sampling
                 selected = sorted_pop[:self.selection_size]
-                self.learn(selected)
+                self.learn_pbil(selected)
                 population = [self.sample_permutation() for _ in range(self.population_size)]
                 
                 print(f"Gen {gen:03d} | Best Fitness: {self.best_fitness:.8f}")
