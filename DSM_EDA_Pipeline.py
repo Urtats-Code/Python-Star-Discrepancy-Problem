@@ -3,8 +3,6 @@ from enum import Enum
 import gurobipy as gp
 from gurobipy import GRB
 import concurrent.futures
-import threading
-import queue
 import os
 import yaml
 from PersistentSDPSolver import PersistentSDPProblem
@@ -24,19 +22,8 @@ def init_worker(n, epsilon):
 def worker_evaluate(permutation):
     return global_solver.evaluate(permutation)
 
-def _learn_logger(log_queue, log_file):
-    with open(log_file, "w") as f:
-        f.write("call,generation,method\n")
-        while True:
-            item = log_queue.get()
-            if item is None:
-                break
-            f.write(f"{item['call']},{item['generation']},{item['method']}\n")
-            f.flush()
-
-
 class DSM_EDA_Pipeline:
-    def __init__(self, n, population_size, selection_size, learning_method, log_file="learn_log.csv", gen_log_file="generation_log.h5"):
+    def __init__(self, n, population_size, selection_size, learning_method, gen_log_file="generation_log.h5"):
         self.n = n
         self.learning_method = learning_method
         self.population_size = population_size
@@ -46,14 +33,6 @@ class DSM_EDA_Pipeline:
         self.best_solution = None
         self.cache = PermutationHashMap()
         self.dsm_corrections = 0
-        self._learn_call_count = 0
-        self._log_queue = queue.Queue()
-        self._log_thread = threading.Thread(
-            target=_learn_logger,
-            args=(self._log_queue, log_file),
-            daemon=True,
-        )
-        self._log_thread.start()
         self._gen_log_file = gen_log_file
 
     def evaluate_population_parallel(self, population, executor):
@@ -84,16 +63,7 @@ class DSM_EDA_Pipeline:
             mat /= (mat.sum(axis=0, keepdims=True) + 1e-15)
         return mat
 
-    def _log_learn(self, method):
-        self._learn_call_count += 1
-        self._log_queue.put({
-            "call": self._learn_call_count,
-            "generation": getattr(self, "_current_gen", -1),
-            "method": method,
-        })
-
     def learn_pbil(self, selected_permutations, learning_rate=0.1, mutation_rate=0.01):
-        self._log_learn("pbil")
         m = len(selected_permutations)
         
         target_matrix = np.zeros((self.n, self.n))
@@ -109,7 +79,6 @@ class DSM_EDA_Pipeline:
             self.dsm = (1.0 - mutation_rate) * self.dsm + mutation_rate * uniform_matrix
 
     def learn(self, selected_permutations, alpha=0.1):
-        self._log_learn("birkhoff")
         m = len(selected_permutations)
         
         self.dsm = np.full((self.n, self.n), alpha / self.n)
@@ -157,7 +126,6 @@ class DSM_EDA_Pipeline:
         ) as executor:
             
             for gen in range(generations):
-                self._current_gen = gen
                 # 1. Parallel Evaluation
                 sorted_pop, sorted_fitness = self.evaluate_population_parallel(population, executor)
                 
@@ -187,8 +155,6 @@ class DSM_EDA_Pipeline:
                 
                 print(f"Gen {gen:03d} | Best Fitness: {self.best_fitness:.8f}")
                 
-        self._log_queue.put(None)
-        self._log_thread.join()
         self._gen_logger.close()
         print(f"DSM corrections needed: {self.dsm_corrections}")
         return self.best_solution, self.best_fitness
@@ -214,19 +180,12 @@ if __name__ == "__main__":
     EPSILON = r_cfg["epsilon"]
     WORKERS = r_cfg["num_workers"] or max(1, multiprocessing.cpu_count() - 1)
 
-    log_file = log_cfg.get("log_file", "learn_log.csv")
-    log_dir = os.path.dirname(log_file)
-    if log_dir and not os.path.isdir(log_dir):
-        raise ValueError(f"Log directory does not exist: {log_dir}")
-    if os.path.exists(log_file):
-        os.remove(log_file)
-
     gen_log_file = log_cfg.get("gen_log_file", "generation_log.h5")
     gen_log_dir = os.path.dirname(gen_log_file)
     if gen_log_dir and not os.path.isdir(gen_log_dir):
         raise ValueError(f"Generation log directory does not exist: {gen_log_dir}")
 
-    pipeline = DSM_EDA_Pipeline(n=N, population_size=POP_SIZE, selection_size=SELECTION_SIZE, learning_method=LEARNING_METHOD, log_file=log_file, gen_log_file=gen_log_file)
+    pipeline = DSM_EDA_Pipeline(n=N, population_size=POP_SIZE, selection_size=SELECTION_SIZE, learning_method=LEARNING_METHOD, gen_log_file=gen_log_file)
 
     if LEARNING_METHOD == LearningStrategy.PBIL:
         pipeline.pbil_learning_rate = pbil_cfg.get("learning_rate", 0.1)

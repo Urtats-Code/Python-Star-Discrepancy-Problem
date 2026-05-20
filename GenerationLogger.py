@@ -10,7 +10,9 @@ import numpy as np
 class GenerationLogger:
     def __init__(self, file_path: str, metadata: dict):
         if os.path.exists(file_path):
-            os.remove(file_path)
+            base, ext = os.path.splitext(file_path)
+            timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
+            file_path = f"{base}_{timestamp}{ext}"
 
         with h5py.File(file_path, "w") as f:
             grp = f.create_group("metadata")

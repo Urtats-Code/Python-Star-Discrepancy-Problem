@@ -20,5 +20,4 @@ sinkhorn:
   iterations: 10
 
 logging:
-  log_file: "learn_log.csv"           # Path where learn() call log will be written (CSV)
   gen_log_file: "generation_log.h5"   # Path where per-generation data will be written (HDF5)
