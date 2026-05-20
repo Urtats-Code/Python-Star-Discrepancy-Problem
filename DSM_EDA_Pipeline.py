@@ -1,11 +1,17 @@
 import numpy as np
+from enum import Enum
 import gurobipy as gp
 from gurobipy import GRB
 import concurrent.futures
+import yaml
 from PersistentSDPSolver import PersistentSDPProblem
 from PermutationHashMap import PermutationHashMap
 
 global_solver = None
+
+class LearningStrategy(Enum):                                                                                                                                                                                        
+    BIRKHOFF = "birkhoff"                                                                                                                                                                                            
+    PBIL = "pbil"      
 
 def init_worker(n, epsilon):
     global global_solver
@@ -15,8 +21,9 @@ def worker_evaluate(permutation):
     return global_solver.evaluate(permutation)
 
 class DSM_EDA_Pipeline:
-    def __init__(self, n, population_size, selection_size):
+    def __init__(self, n, population_size, selection_size, learning_method):
         self.n = n
+        self.learning_method = learning_method
         self.population_size = population_size
         self.selection_size = selection_size
         self.dsm = np.full((n, n), 1.0 / n)
@@ -116,7 +123,13 @@ class DSM_EDA_Pipeline:
                 
                 # 3. Learning & Sampling
                 selected = sorted_pop[:self.selection_size]
-                self.learn_pbil(selected)
+                
+                if(self.learning_method == LearningStrategy.BIRKHOFF):
+                    self.learn(selected)
+
+                if(self.learning_method == LearningStrategy.PBIL):
+                    self.learn_pbil(selected)
+
                 population = [self.sample_permutation() for _ in range(self.population_size)]
                 
                 print(f"Gen {gen:03d} | Best Fitness: {self.best_fitness:.8f}")
@@ -126,18 +139,32 @@ class DSM_EDA_Pipeline:
 
 if __name__ == "__main__":
     import multiprocessing
-    
-    # Configuration
-    N = 8 
-    POP_SIZE = 200
-    SELECTION_SIZE = 20
-    GENERATIONS = 100
-    EPSILON = 0.0001
-    
-    WORKERS = max(1, multiprocessing.cpu_count() - 1)
 
-    pipeline = DSM_EDA_Pipeline(n=N, population_size=POP_SIZE, selection_size=SELECTION_SIZE)
-    
+    with open("config.yaml", "r") as f:
+        cfg = yaml.safe_load(f)
+
+    p_cfg = cfg["pipeline"]
+    r_cfg = cfg["run"]
+    pbil_cfg = cfg.get("pbil", {})
+    birkhoff_cfg = cfg.get("birkhoff", {})
+
+    N = p_cfg["n"]
+    POP_SIZE = p_cfg["population_size"]
+    SELECTION_SIZE = p_cfg["selection_size"]
+    LEARNING_METHOD = LearningStrategy(p_cfg["learning_method"])
+
+    GENERATIONS = r_cfg["generations"]
+    EPSILON = r_cfg["epsilon"]
+    WORKERS = r_cfg["num_workers"] or max(1, multiprocessing.cpu_count() - 1)
+
+    pipeline = DSM_EDA_Pipeline(n=N, population_size=POP_SIZE, selection_size=SELECTION_SIZE, learning_method=LEARNING_METHOD)
+
+    if LEARNING_METHOD == LearningStrategy.PBIL:
+        pipeline.pbil_learning_rate = pbil_cfg.get("learning_rate", 0.1)
+        pipeline.pbil_mutation_rate = pbil_cfg.get("mutation_rate", 0.01)
+    if LEARNING_METHOD == LearningStrategy.BIRKHOFF:
+        pipeline.birkhoff_alpha = birkhoff_cfg.get("alpha", 0.1)
+
     best_p, best_f = pipeline.run(epsilon=EPSILON, generations=GENERATIONS, num_workers=WORKERS)
 
     print("\n--- Final Result ---")
