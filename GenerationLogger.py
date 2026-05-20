@@ -1,3 +1,4 @@
+import json
 import os
 import queue
 import threading
@@ -39,6 +40,36 @@ class GenerationLogger:
     def close(self) -> None:
         self._queue.put(None)
         self._thread.join()
+
+    @staticmethod
+    def jsonnify(h5_path: str, json_path: str = None) -> str:
+        if json_path is None:
+            json_path = os.path.splitext(h5_path)[0] + ".json"
+
+        def _read_group(grp):
+            return {key: _read_item(grp[key]) for key in grp}
+
+        def _read_item(item):
+            if isinstance(item, h5py.Group):
+                return _read_group(item)
+            val = item[()]
+            if isinstance(val, bytes):
+                return val.decode()
+            if isinstance(val, np.ndarray):
+                return val.tolist()
+            if isinstance(val, (np.integer,)):
+                return int(val)
+            if isinstance(val, (np.floating,)):
+                return float(val)
+            return val
+
+        with h5py.File(h5_path, "r") as f:
+            data = _read_group(f)
+
+        with open(json_path, "w") as f:
+            json.dump(data, f, indent=2)
+
+        return json_path
 
     def _writer_loop(self) -> None:
         with h5py.File(self._file_path, "a") as f:

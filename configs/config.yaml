@@ -20,4 +20,4 @@ sinkhorn:
   iterations: 10
 
 logging:
-  gen_log_file: "generation_log.h5"   # Path where per-generation data will be written (HDF5)
+  gen_log_file: "./logs/generation_log.h5"   # Path where per-generation data will be written (HDF5)
