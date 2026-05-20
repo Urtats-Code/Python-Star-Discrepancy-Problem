@@ -1,22 +1,24 @@
-# DSM EDA Pipeline Configuration
-
 pipeline:
-  n: 8                        # Problem size (number of elements in permutation)
-  population_size: 200        # Number of individuals per generation
-  selection_size: 20          # Number of top individuals selected for learning
-  learning_method: "birkhoff" # Learning strategy: "birkhoff" or "pbil"
+  n: 8
+  population_size: 200
+  selection_size: 20
+  learning_method: "birkhoff"
 
 run:
-  generations: 100            # Number of generations to run
-  epsilon: 0.0001             # Epsilon for SDP solver
-  num_workers: null           # Worker processes (null = cpu_count - 1)
+  generations: 100
+  epsilon: 0.0001
+  num_workers: null
 
 pbil:
-  learning_rate: 0.1          # PBIL learning rate
-  mutation_rate: 0.01         # PBIL mutation rate
+  learning_rate: 0.1
+  mutation_rate: 0.01
 
 birkhoff:
-  alpha: 0.1                  # Birkhoff smoothing parameter
+  alpha: 0.1
 
 sinkhorn:
-  iterations: 10              # Sinkhorn-Knopp normalization iterations
+  iterations: 10
+
+logging:
+  log_file: "learn_log.csv"           # Path where learn() call log will be written (CSV)
+  gen_log_file: "generation_log.h5"   # Path where per-generation data will be written (HDF5)
