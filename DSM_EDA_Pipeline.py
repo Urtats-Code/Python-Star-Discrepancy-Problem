@@ -3,6 +3,7 @@ import gurobipy as gp
 from gurobipy import GRB
 import concurrent.futures
 from PersistentSDPSolver import PersistentSDPProblem
+from PermutationHashMap import PermutationHashMap
 
 # ==========================================
 # 2. Multiprocessing Worker Setup
@@ -26,15 +27,21 @@ class DSM_EDA_Pipeline:
         self.n = n
         self.population_size = population_size
         self.selection_size = selection_size
-        self.dsm = np.full((n, n), 1.0 / n) 
+        self.dsm = np.full((n, n), 1.0 / n)
         self.best_fitness = float('inf')
         self.best_solution = None
+        self.cache = PermutationHashMap()
 
     def evaluate_population_parallel(self, population, executor):
         """Uses the multiprocessing pool to evaluate the population."""
-        # Map population to workers
-        fitness_scores = list(executor.map(worker_evaluate, population))
-        
+        uncached = [p for p in population if not self.cache.contains(p)]
+        if uncached:
+            new_scores = list(executor.map(worker_evaluate, uncached))
+            for perm, score in zip(uncached, new_scores):
+                self.cache.set(perm, score)
+
+        fitness_scores = [self.cache.get(p) for p in population]
+
         # Sort population by fitness
         sorted_indices = np.argsort(fitness_scores)
         return [population[i] for i in sorted_indices], [fitness_scores[i] for i in sorted_indices]
@@ -113,9 +120,9 @@ if __name__ == "__main__":
     import multiprocessing
     
     # Configuration
-    N = 20  
-    POP_SIZE = 20
-    SELECTION_SIZE = 5
+    N = 8 
+    POP_SIZE = 200
+    SELECTION_SIZE = 20
     GENERATIONS = 100
     EPSILON = 0.0001
     
