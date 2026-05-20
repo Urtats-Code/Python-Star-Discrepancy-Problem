@@ -5,23 +5,15 @@ import concurrent.futures
 from PersistentSDPSolver import PersistentSDPProblem
 from PermutationHashMap import PermutationHashMap
 
-# ==========================================
-# 2. Multiprocessing Worker Setup
-# ==========================================
 global_solver = None
 
 def init_worker(n, epsilon):
-    """Initializes one Persistent Gurobi model per CPU Core."""
     global global_solver
     global_solver = PersistentSDPProblem(n, epsilon)
 
 def worker_evaluate(permutation):
-    """Worker function that uses its local solver."""
     return global_solver.evaluate(permutation)
 
-# ==========================================
-# 3. The EDA Pipeline
-# ==========================================
 class DSM_EDA_Pipeline:
     def __init__(self, n, population_size, selection_size):
         self.n = n
@@ -31,9 +23,9 @@ class DSM_EDA_Pipeline:
         self.best_fitness = float('inf')
         self.best_solution = None
         self.cache = PermutationHashMap()
+        self.dsm_corrections = 0
 
     def evaluate_population_parallel(self, population, executor):
-        """Uses the multiprocessing pool to evaluate the population."""
         uncached = [p for p in population if not self.cache.contains(p)]
         if uncached:
             new_scores = list(executor.map(worker_evaluate, uncached))
@@ -42,9 +34,17 @@ class DSM_EDA_Pipeline:
 
         fitness_scores = [self.cache.get(p) for p in population]
 
-        # Sort population by fitness
         sorted_indices = np.argsort(fitness_scores)
         return [population[i] for i in sorted_indices], [fitness_scores[i] for i in sorted_indices]
+
+    def _is_doubly_stochastic(self, matrix, tol=1e-6):
+        if np.any(matrix < 0):
+            return False
+        if not np.allclose(matrix.sum(axis=1), 1.0, atol=tol):
+            return False
+        if not np.allclose(matrix.sum(axis=0), 1.0, atol=tol):
+            return False
+        return True
 
     def sinkhorn_knopp(self, matrix, iterations=10):
         mat = matrix.copy()
@@ -54,24 +54,19 @@ class DSM_EDA_Pipeline:
         return mat
 
     def learn(self, selected_permutations, alpha=0.1):
-        """Vectorized Birkhoff Learning."""
-        uniform_val = alpha / self.n
-        new_info = np.zeros((self.n, self.n))
+        m = len(selected_permutations)
         
-        # Vectorized accumulation
-        num_selected = len(selected_permutations)
-        rows = np.tile(np.arange(self.n), num_selected)
+        self.dsm = np.full((self.n, self.n), alpha / self.n)
+        
+        w = (1.0 - alpha) / m
+        
+        freq = np.zeros((self.n, self.n))
+        rows = np.tile(np.arange(self.n), m)
         cols = np.array(selected_permutations).flatten() - 1  # 0-indexing
         
-        np.add.at(new_info, (rows, cols), 1.0)
+        np.add.at(freq, (rows, cols), 1.0)
         
-        # Calculate weighted info
-        weight = (1.0 - alpha) / num_selected
-        new_info = (new_info * weight) + uniform_val
-        
-        # Stabilize via Sinkhorn
-        updated_dsm = (1 - alpha) * self.dsm + new_info
-        self.dsm = self.sinkhorn_knopp(updated_dsm)
+        self.dsm += freq * w
 
     def sample_permutation(self):
         perm = np.zeros(self.n, dtype=int)
@@ -111,11 +106,9 @@ class DSM_EDA_Pipeline:
                 
                 print(f"Gen {gen:03d} | Best Fitness: {self.best_fitness:.8f}")
                 
+        print(f"DSM corrections needed: {self.dsm_corrections}")
         return self.best_solution, self.best_fitness
 
-# ==========================================
-# 4. Execution Block
-# ==========================================
 if __name__ == "__main__":
     import multiprocessing
     
