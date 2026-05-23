@@ -1,0 +1,19 @@
+pipeline:
+  n: [8]
+  population_size: [20, 50, 100, 200]
+  selection_size: [10, 20, 30, 50]
+  learning_method: ["birkhoff", "pbil"]
+
+run:
+  generations: [50, 100, 200]
+  epsilon: [0.0001]
+
+pbil:
+  learning_rate: [0.1]
+  mutation_rate: [0.01]
+
+birkhoff:
+  alpha: [0.1]
+
+logging:
+  gen_log_file: "./logs/generation_log.h5"  # base name; each run gets a unique timestamped file

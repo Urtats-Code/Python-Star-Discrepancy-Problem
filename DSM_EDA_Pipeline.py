@@ -27,7 +27,7 @@ class DSM_EDA_Pipeline:
         self.n = n
         self.learning_method = learning_method
         self.population_size = population_size
-        self.selection_size = selection_size
+        self.selection_size = max(1, int(population_size * selection_size / 100))
         self.dsm = np.full((n, n), 1.0 / n)
         self.best_fitness = float('inf')
         self.best_solution = None

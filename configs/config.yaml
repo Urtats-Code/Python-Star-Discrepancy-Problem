@@ -1,7 +1,7 @@
 pipeline:
   n: 8
   population_size: 200
-  selection_size: 20
+  selection_size: 10  # percentage of population (e.g. 10 = 10%)
   learning_method: "birkhoff"
 
 run:

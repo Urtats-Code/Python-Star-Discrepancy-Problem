@@ -27,3 +27,6 @@ htmlcov/
 .vscode/
 .idea/
 *.swp
+
+*.h5
+*.csv
