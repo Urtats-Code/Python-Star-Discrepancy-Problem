@@ -6,6 +6,10 @@ venv/
 env/
 .venv/
 .env/
+plots
+logs
+*.png
+*.mp4
 
 build/
 develop-eggs/

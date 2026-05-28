@@ -1,11 +1,11 @@
 pipeline:
   n: 8
   population_size: 200
-  selection_size: 10  # percentage of population (e.g. 10 = 10%)
+  selection_size: 20 # percentage of population (e.g. 10 = 10%)
   learning_method: "birkhoff"
 
 run:
-  generations: 100
+  generations: 500
   epsilon: 0.0001
   num_workers: null
 
@@ -21,3 +21,12 @@ sinkhorn:
 
 logging:
   gen_log_file: "./logs/generation_log.h5"   # Path where per-generation data will be written (HDF5)
+
+visualization:
+  enabled: true
+  output_dir: "plots"
+  plot_fitness: true
+  plot_dsm: true
+  plot_combined: true
+  save_animation: true
+  save_combined_animation: true

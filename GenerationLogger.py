@@ -34,6 +34,10 @@ class GenerationLogger:
         self._thread = threading.Thread(target=self._writer_loop, daemon=True)
         self._thread.start()
 
+    @property
+    def file_path(self) -> str:
+        return self._file_path
+
     def log(self, generation_data: dict) -> None:
         self._queue.put(generation_data)
 

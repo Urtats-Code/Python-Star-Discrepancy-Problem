@@ -5,15 +5,17 @@ from gurobipy import GRB
 import concurrent.futures
 import os
 import yaml
+import argparse
 from PersistentSDPSolver import PersistentSDPProblem
 from PermutationHashMap import PermutationHashMap
 from GenerationLogger import GenerationLogger
+from Visualize import Visualize
 
 global_solver = None
 
-class LearningStrategy(Enum):                                                                                                                                                                                        
-    BIRKHOFF = "birkhoff"                                                                                                                                                                                            
-    PBIL = "pbil"      
+class LearningStrategy(Enum):
+    BIRKHOFF = "birkhoff"
+    PBIL = "pbil"
 
 def init_worker(n, epsilon):
     global global_solver
@@ -113,56 +115,88 @@ class DSM_EDA_Pipeline:
             "epsilon":         epsilon,
             "num_workers":     num_workers,
         })
+        self._gen_log_file = self._gen_logger.file_path
 
         # Initialize random population
         population = [np.random.permutation(self.n) + 1 for _ in range(self.population_size)]
 
         # Create a ProcessPoolExecutor to handle evaluations in parallel
         print(f"Starting EDA with {num_workers} parallel workers...")
-        with concurrent.futures.ProcessPoolExecutor(
-            max_workers=num_workers,
-            initializer=init_worker, 
-            initargs=(self.n, epsilon)
-        ) as executor:
-            
-            for gen in range(generations):
-                # 1. Parallel Evaluation
-                sorted_pop, sorted_fitness = self.evaluate_population_parallel(population, executor)
+        try:
+            with concurrent.futures.ProcessPoolExecutor(
+                max_workers=num_workers,
+                initializer=init_worker, 
+                initargs=(self.n, epsilon)
+            ) as executor:
                 
-                # 2. Track Best
-                if sorted_fitness[0] < self.best_fitness:
-                    self.best_fitness = sorted_fitness[0]
-                    self.best_solution = sorted_pop[0]
-                
-                # 3. Learning & Sampling
-                selected = sorted_pop[:self.selection_size]
-                
-                if(self.learning_method == LearningStrategy.BIRKHOFF):
-                    self.learn(selected)
+                for gen in range(generations):
+                    # 1. Parallel Evaluation
+                    sorted_pop, sorted_fitness = self.evaluate_population_parallel(population, executor)
+                    
+                    # 2. Track Best
+                    if sorted_fitness[0] < self.best_fitness:
+                        self.best_fitness = sorted_fitness[0]
+                        self.best_solution = sorted_pop[0]
+                    
+                    # 3. Learning & Sampling
+                    selected = sorted_pop[:self.selection_size]
+                    
+                    if(self.learning_method == LearningStrategy.BIRKHOFF):
+                        self.learn(selected, alpha=getattr(self, "birkhoff_alpha", 0.1))
 
-                if(self.learning_method == LearningStrategy.PBIL):
-                    self.learn_pbil(selected)
+                    if(self.learning_method == LearningStrategy.PBIL):
+                        self.learn_pbil(selected, learning_rate=getattr(self, "pbil_learning_rate", 0.1), mutation_rate=getattr(self, "pbil_mutation_rate", 0.01))
 
-                self._gen_logger.log({
-                    "generation":   gen,
-                    "population":   np.array(sorted_pop,     dtype=np.int64),
-                    "fitness":      np.array(sorted_fitness,  dtype=np.float64),
-                    "best_fitness": float(self.best_fitness),
-                    "dsm":          self.dsm.copy(),
-                })
+                    self._gen_logger.log({
+                        "generation":   gen,
+                        "population":   np.array(sorted_pop,     dtype=np.int64),
+                        "fitness":      np.array(sorted_fitness,  dtype=np.float64),
+                        "best_fitness": float(self.best_fitness),
+                        "dsm":          self.dsm.copy(),
+                    })
 
-                population = [self.sample_permutation() for _ in range(self.population_size)]
-                
-                print(f"Gen {gen:03d} | Best Fitness: {self.best_fitness:.8f}")
-                
-        self._gen_logger.close()
+                    population = [self.sample_permutation() for _ in range(self.population_size)]
+                    
+                    print(f"Gen {gen:03d} | Best Fitness: {self.best_fitness:.8f}")
+        finally:
+            self._gen_logger.close()
+        
         print(f"DSM corrections needed: {self.dsm_corrections}")
         return self.best_solution, self.best_fitness
 
-if __name__ == "__main__":
+    def visualize(self, output_dir="plots", plot_fitness=True, plot_dsm=True, plot_combined=True, save_animation=False, save_combined_animation=False):
+        """
+        Generates visualizations from the logged data.
+        """
+        if not os.path.exists(self._gen_log_file):
+            print(f"Cannot visualize: {self._gen_log_file} not found.")
+            return
+
+        print("\n--- Generating Visualizations ---")
+        if not os.path.exists(output_dir):
+            os.makedirs(output_dir)
+
+        viz = Visualize(self._gen_log_file)
+        
+        if plot_fitness:
+            viz.plot_fitness(save_path=os.path.join(output_dir, "fitness_evolution.png"))
+            
+        if plot_dsm:
+            viz.plot_best_dsm(save_path=os.path.join(output_dir, "final_dsm.png"))
+            
+        if plot_combined:
+            viz.plot_dsm_with_fitness(save_path=os.path.join(output_dir, "combined_viz.png"))
+            
+        if save_animation:
+            viz.plot_dsm_history(save_mp4=True, filename=os.path.join(output_dir, "dsm_evolution.mp4"))
+
+        if save_combined_animation:
+            viz.plot_dsm_with_fitness_history(save_mp4=True, filename=os.path.join(output_dir, "dsm_fitness_evolution.mp4"))
+
+def main(config_path: str):
     import multiprocessing
 
-    with open("config.yaml", "r") as f:
+    with open(config_path, "r") as f:
         cfg = yaml.safe_load(f)
 
     p_cfg = cfg["pipeline"]
@@ -170,6 +204,7 @@ if __name__ == "__main__":
     pbil_cfg = cfg.get("pbil", {})
     birkhoff_cfg = cfg.get("birkhoff", {})
     log_cfg = cfg.get("logging", {})
+    visualize_cfg = cfg.get("visualization", {})
 
     N = p_cfg["n"]
     POP_SIZE = p_cfg["population_size"]
@@ -178,12 +213,12 @@ if __name__ == "__main__":
 
     GENERATIONS = r_cfg["generations"]
     EPSILON = r_cfg["epsilon"]
-    WORKERS = r_cfg["num_workers"] or max(1, multiprocessing.cpu_count() - 1)
+    WORKERS = r_cfg.get("num_workers") or max(1, multiprocessing.cpu_count() - 1)
 
     gen_log_file = log_cfg.get("gen_log_file", "generation_log.h5")
     gen_log_dir = os.path.dirname(gen_log_file)
     if gen_log_dir and not os.path.isdir(gen_log_dir):
-        raise ValueError(f"Generation log directory does not exist: {gen_log_dir}")
+        os.makedirs(gen_log_dir, exist_ok=True)
 
     pipeline = DSM_EDA_Pipeline(n=N, population_size=POP_SIZE, selection_size=SELECTION_SIZE, learning_method=LEARNING_METHOD, gen_log_file=gen_log_file)
 
@@ -195,6 +230,22 @@ if __name__ == "__main__":
 
     best_p, best_f = pipeline.run(epsilon=EPSILON, generations=GENERATIONS, num_workers=WORKERS)
 
+    if visualize_cfg.get("enabled", False):
+        pipeline.visualize(
+            output_dir=visualize_cfg.get("output_dir", "plots"),
+            plot_fitness=visualize_cfg.get("plot_fitness", True),
+            plot_dsm=visualize_cfg.get("plot_dsm", True),
+            plot_combined=visualize_cfg.get("plot_combined", True),
+            save_animation=visualize_cfg.get("save_animation", False),
+            save_combined_animation=visualize_cfg.get("save_combined_animation", False)
+        )
+
     print("\n--- Final Result ---")
     print(f"Best Permutation: {best_p}")
     print(f"Best Fitness:     {best_f}")
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="DSM EDA Pipeline execution.")
+    parser.add_argument("--config", default="configs/config.yaml", help="Path to config YAML")
+    args = parser.parse_args()
+    main(args.config)
