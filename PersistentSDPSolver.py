@@ -2,7 +2,6 @@
 import numpy as np
 import gurobipy as gp
 from gurobipy import GRB
-from SDPProblem import SDPProblem  # Assuming your solver is in SDPProblem.py
 
 class PersistentSDPProblem:
     def __init__(self, n, epsilon):
@@ -17,7 +16,7 @@ class PersistentSDPProblem:
         # Build persistent model
         self.model = gp.Model("SDP_Persistent", env=self.env)
         self.model.Params.NonConvex = 2
-        self.model.Params.MIPGap = 1e-4
+        self.model.Params.MIPGap = 0.0
         self.model.Params.Threads = 1  # Limit internal threads since we parallelize externally
         
         # Static variables

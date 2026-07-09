@@ -10,6 +10,7 @@ from PersistentSDPSolver import PersistentSDPProblem
 from PermutationHashMap import PermutationHashMap
 from GenerationLogger import GenerationLogger
 from Visualize import Visualize
+from measures.HammingDiversity import HammingDiversity
 
 global_solver = None
 
@@ -36,6 +37,7 @@ class DSM_EDA_Pipeline:
         self.cache = PermutationHashMap()
         self.dsm_corrections = 0
         self._gen_log_file = gen_log_file
+        self.diversity = HammingDiversity()
 
     def evaluate_population_parallel(self, population, executor):
         uncached = [p for p in population if not self.cache.contains(p)]
@@ -58,9 +60,7 @@ class DSM_EDA_Pipeline:
             return False
         return True
 
-    # Applies the Sinkhorn-Knopp algorithm to convert this matrix into a Doubly Stochastic Matrix (DSM).
-    # Zero rows/columns (caused by zeroing out singular values) are replaced with a uniform distribution
-    # before normalizing, so that the algorithm can still converge.
+
     def sinkhorn_knopp(self, matrix, tol=1e-6, max_iter=10000):
         result = matrix.copy().astype(float)
         n_rows, n_cols = result.shape
@@ -168,17 +168,21 @@ class DSM_EDA_Pipeline:
                     if(self.learning_method == LearningStrategy.PBIL):
                         self.learn_pbil(selected, learning_rate=getattr(self, "pbil_learning_rate", 0.1), mutation_rate=getattr(self, "pbil_mutation_rate", 0.01))
 
+                    # 4. Diversity Tracking
+                    diversity_stats = self.diversity.record(gen, sorted_pop)
+
                     self._gen_logger.log({
                         "generation":   gen,
                         "population":   np.array(sorted_pop,     dtype=np.int64),
                         "fitness":      np.array(sorted_fitness,  dtype=np.float64),
                         "best_fitness": float(self.best_fitness),
                         "dsm":          self.dsm.copy(),
+                        "diversity":    {k: v for k, v in diversity_stats.items() if k != "generation"},
                     })
 
                     population = [self.sample_permutation() for _ in range(self.population_size)]
-                    
-                    print(f"Gen {gen:03d} | Best Fitness: {self.best_fitness:.8f}")
+
+                    print(f"Gen {gen:03d} | Best Fitness: {self.best_fitness:.8f} | Diversity: {diversity_stats['mean_normalized']:.4f}")
         finally:
             self._gen_logger.close()
         

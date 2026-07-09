@@ -87,4 +87,8 @@ class GenerationLogger:
                 grp.create_dataset("fitness",      data=np.asarray(item["fitness"],      dtype=np.float64))
                 grp.create_dataset("best_fitness", data=float(item["best_fitness"]))
                 grp.create_dataset("dsm",          data=np.asarray(item["dsm"],          dtype=np.float64))
+                if "diversity" in item:
+                    div_grp = grp.create_group("diversity")
+                    for key, value in item["diversity"].items():
+                        div_grp.create_dataset(key, data=float(value))
                 f.flush()
