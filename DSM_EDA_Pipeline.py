@@ -58,12 +58,33 @@ class DSM_EDA_Pipeline:
             return False
         return True
 
-    def sinkhorn_knopp(self, matrix, iterations=10):
-        mat = matrix.copy()
-        for _ in range(iterations):
-            mat /= (mat.sum(axis=1, keepdims=True) + 1e-15)
-            mat /= (mat.sum(axis=0, keepdims=True) + 1e-15)
-        return mat
+    # Applies the Sinkhorn-Knopp algorithm to convert this matrix into a Doubly Stochastic Matrix (DSM).
+    # Zero rows/columns (caused by zeroing out singular values) are replaced with a uniform distribution
+    # before normalizing, so that the algorithm can still converge.
+    def sinkhorn_knopp(self, matrix, tol=1e-6, max_iter=10000):
+        result = matrix.copy().astype(float)
+        n_rows, n_cols = result.shape
+        for _ in range(max_iter):
+            # Normalize rows — replace zero rows with uniform 1/n_cols
+            row_sums = result.sum(axis=1, keepdims=True)
+            zero_rows = (row_sums == 0).flatten()
+            result[zero_rows] = 1.0 / n_cols
+            row_sums[zero_rows] = 1.0
+            result /= row_sums
+
+            # Normalize columns — replace zero columns with uniform 1/n_rows
+            col_sums = result.sum(axis=0, keepdims=True)
+            zero_cols = (col_sums == 0).flatten()
+            result[:, zero_cols] = 1.0 / n_rows
+            col_sums[:, zero_cols] = 1.0
+            result /= col_sums
+
+            # Check convergence: rows and columns should all sum to 1
+            row_err = np.max(np.abs(result.sum(axis=1) - 1))
+            col_err = np.max(np.abs(result.sum(axis=0) - 1))
+            if row_err < tol and col_err < tol:
+                break
+        return result
 
     def learn_pbil(self, selected_permutations, learning_rate=0.1, mutation_rate=0.01):
         m = len(selected_permutations)
