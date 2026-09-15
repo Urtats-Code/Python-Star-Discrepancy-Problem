@@ -4,6 +4,7 @@ import gurobipy as gp
 from gurobipy import GRB
 import concurrent.futures
 import os
+import time
 import yaml
 import argparse
 from PersistentSDPSolver import PersistentSDPProblem
@@ -11,6 +12,7 @@ from PermutationHashMap import PermutationHashMap
 from GenerationLogger import GenerationLogger
 from Visualize import Visualize
 from measures.HammingDiversity import HammingDiversity
+from svd.SVD import SVD_Noise_Injection
 
 global_solver = None
 
@@ -18,9 +20,9 @@ class LearningStrategy(Enum):
     BIRKHOFF = "birkhoff"
     PBIL = "pbil"
 
-def init_worker(n, epsilon):
+def init_worker(n, epsilon, time_limit):
     global global_solver
-    global_solver = PersistentSDPProblem(n, epsilon)
+    global_solver = PersistentSDPProblem(n, epsilon, time_limit=time_limit)
 
 def worker_evaluate(permutation):
     return global_solver.evaluate(permutation)
@@ -38,6 +40,52 @@ class DSM_EDA_Pipeline:
         self.dsm_corrections = 0
         self._gen_log_file = gen_log_file
         self.diversity = HammingDiversity()
+        self.time_limit = None
+        self.svd_enabled = False
+        self.svd_theta = 0.3
+        self.svd_every = 1
+        self.sinkhorn_max_iter = 10000
+
+    @property
+    def gen_log_file(self):
+        return self._gen_log_file
+
+    def permutation_to_matrix(self, permutation):
+        """Builds the permutation matrix $P_\\sigma$ for a 1-indexed permutation array."""
+        matrix = np.zeros((self.n, self.n))
+        matrix[np.arange(self.n), np.asarray(permutation) - 1] = 1.0
+        return matrix
+
+    @staticmethod
+    def fibonacci_permutation(n, shift=1):
+        """
+        Builds the permutation sigma^(0) induced by the shifted Fibonacci
+        (golden-ratio Kronecker) sequence, as used for the warm-start bias
+        in Equation eq:warm_start. Point i is assigned the rank of
+        {(i + shift) * phi} among all n fractional parts, following the
+        shifted-start construction shown to outperform the unshifted
+        Fibonacci set in Clement et al.
+        """
+        phi = (1.0 + np.sqrt(5.0)) / 2.0
+        indices = np.arange(1, n + 1)
+        fractional = np.mod((indices + shift) * phi, 1.0)
+        order = np.argsort(fractional)
+        perm = np.empty(n, dtype=int)
+        perm[order] = indices
+        return perm
+
+    def warm_start(self, alpha0=0.3, shift=1):
+        """
+        Initializes M^(0) per Equation eq:warm_start, blending the uniform
+        DSM with the permutation matrix of a Fibonacci-pattern permutation:
+        M^(0) = alpha0 * Ubar + (1 - alpha0) * P_{sigma^(0)}.
+        """
+        sigma0 = self.fibonacci_permutation(self.n, shift=shift)
+        p_sigma0 = self.permutation_to_matrix(sigma0)
+        ubar = np.full((self.n, self.n), 1.0 / self.n)
+        self.dsm = alpha0 * ubar + (1.0 - alpha0) * p_sigma0
+        self.warm_start_permutation = sigma0
+        return sigma0
 
     def evaluate_population_parallel(self, population, executor):
         uncached = [p for p in population if not self.cache.contains(p)]
@@ -62,7 +110,13 @@ class DSM_EDA_Pipeline:
 
 
     def sinkhorn_knopp(self, matrix, tol=1e-6, max_iter=10000):
-        result = matrix.copy().astype(float)
+        # Sinkhorn-Knopp only rescales rows/columns to sum to 1; it assumes a
+        # nonnegative input and cannot fix sign. Reconstructing M = U Sigma V^T
+        # after perturbing Sigma can produce negative entries (U, V are not
+        # nonnegative in general even though the original DSM was), so those
+        # must be clipped before normalizing or the result is not a valid DSM
+        # (and sample_permutation() would receive negative probabilities).
+        result = np.clip(matrix, 0.0, None).astype(float)
         n_rows, n_cols = result.shape
         for _ in range(max_iter):
             # Normalize rows — replace zero rows with uniform 1/n_cols
@@ -86,20 +140,15 @@ class DSM_EDA_Pipeline:
                 break
         return result
 
-    def learn_pbil(self, selected_permutations, learning_rate=0.1, mutation_rate=0.01):
-        m = len(selected_permutations)
-        
-        target_matrix = np.zeros((self.n, self.n))
-        rows = np.tile(np.arange(self.n), m)
-        cols = np.array(selected_permutations).flatten() - 1  # 0-indexing
-        
-        np.add.at(target_matrix, (rows, cols), 1.0 / m)
-        
-        self.dsm = (1.0 - learning_rate) * self.dsm + learning_rate * target_matrix
-        
-        if mutation_rate > 0:
-            uniform_matrix = 1.0 / self.n
-            self.dsm = (1.0 - mutation_rate) * self.dsm + mutation_rate * uniform_matrix
+    def learn_pbil(self, best_permutation, alpha=0.1):
+        """
+        Population-Based Incremental Learning update, per Equation
+        eq:pbil_learning: M^(t+1) = M^t * (1 - alpha) + Mhat * alpha, where
+        Mhat is the permutation matrix of the single best solution found so
+        far (not an average over the current elite set).
+        """
+        best_matrix = self.permutation_to_matrix(best_permutation)
+        self.dsm = self.dsm * (1.0 - alpha) + best_matrix * alpha
 
     def learn(self, selected_permutations, alpha=0.1):
         m = len(selected_permutations)
@@ -126,7 +175,7 @@ class DSM_EDA_Pipeline:
             perm[i] = available_cols.pop(choice_idx) + 1
         return perm
 
-    def run(self, epsilon=0.0001, generations=50, num_workers=4):
+    def run(self, epsilon=0.0001, generations=50, num_workers=4, max_duration_seconds=None):
         self._gen_logger = GenerationLogger(self._gen_log_file, metadata={
             "n":               self.n,
             "population_size": self.population_size,
@@ -141,16 +190,31 @@ class DSM_EDA_Pipeline:
         # Initialize random population
         population = [np.random.permutation(self.n) + 1 for _ in range(self.population_size)]
 
+        start_time = time.time()
+        stopped_early = False
+        completed_generations = 0
+
         # Create a ProcessPoolExecutor to handle evaluations in parallel
         print(f"Starting EDA with {num_workers} parallel workers...")
         try:
             with concurrent.futures.ProcessPoolExecutor(
                 max_workers=num_workers,
-                initializer=init_worker, 
-                initargs=(self.n, epsilon)
+                initializer=init_worker,
+                initargs=(self.n, epsilon, self.time_limit)
             ) as executor:
-                
+
                 for gen in range(generations):
+                    # 0. Training-level time budget: stop cleanly rather than
+                    # let an external timeout kill the process mid-run. The
+                    # current DSM, best solution, and every generation logged
+                    # so far are already on disk, so nothing is lost.
+                    if max_duration_seconds is not None and (time.time() - start_time) >= max_duration_seconds:
+                        print(f"Training time limit of {max_duration_seconds}s reached "
+                              f"after {completed_generations} generation(s); stopping early "
+                              f"with best fitness so far: {self.best_fitness:.8f}")
+                        stopped_early = True
+                        break
+
                     # 1. Parallel Evaluation
                     sorted_pop, sorted_fitness = self.evaluate_population_parallel(population, executor)
                     
@@ -166,7 +230,13 @@ class DSM_EDA_Pipeline:
                         self.learn(selected, alpha=getattr(self, "birkhoff_alpha", 0.1))
 
                     if(self.learning_method == LearningStrategy.PBIL):
-                        self.learn_pbil(selected, learning_rate=getattr(self, "pbil_learning_rate", 0.1), mutation_rate=getattr(self, "pbil_mutation_rate", 0.01))
+                        self.learn_pbil(self.best_solution, alpha=getattr(self, "pbil_alpha", 0.1))
+
+                    # 3b. SVD Perturbation (optional exploration step)
+                    if self.svd_enabled and (gen % max(1, self.svd_every) == 0):
+                        mutator = SVD_Noise_Injection(self.dsm)
+                        mutated = mutator.inject(theta=self.svd_theta)
+                        self.dsm = self.sinkhorn_knopp(mutated, max_iter=self.sinkhorn_max_iter)
 
                     # 4. Diversity Tracking
                     diversity_stats = self.diversity.record(gen, sorted_pop)
@@ -181,11 +251,20 @@ class DSM_EDA_Pipeline:
                     })
 
                     population = [self.sample_permutation() for _ in range(self.population_size)]
+                    completed_generations += 1
 
                     print(f"Gen {gen:03d} | Best Fitness: {self.best_fitness:.8f} | Diversity: {diversity_stats['mean_normalized']:.4f}")
         finally:
             self._gen_logger.close()
-        
+
+        self._gen_logger.finalize({
+            "stopped_early":         stopped_early,
+            "generations_requested": generations,
+            "generations_completed": completed_generations,
+            "wall_clock_seconds":    time.time() - start_time,
+            "final_best_fitness":    float(self.best_fitness),
+        })
+
         print(f"DSM corrections needed: {self.dsm_corrections}")
         return self.best_solution, self.best_fitness
 
@@ -228,6 +307,9 @@ def main(config_path: str):
     r_cfg = cfg["run"]
     pbil_cfg = cfg.get("pbil", {})
     birkhoff_cfg = cfg.get("birkhoff", {})
+    warm_start_cfg = cfg.get("warm_start", {})
+    svd_cfg = cfg.get("svd", {})
+    sinkhorn_cfg = cfg.get("sinkhorn", {})
     log_cfg = cfg.get("logging", {})
     visualize_cfg = cfg.get("visualization", {})
 
@@ -238,6 +320,8 @@ def main(config_path: str):
 
     GENERATIONS = r_cfg["generations"]
     EPSILON = r_cfg["epsilon"]
+    TIME_LIMIT = r_cfg.get("time_limit")
+    MAX_DURATION_SECONDS = r_cfg.get("max_duration_seconds")
     WORKERS = r_cfg.get("num_workers") or max(1, multiprocessing.cpu_count() - 1)
 
     gen_log_file = log_cfg.get("gen_log_file", "generation_log.h5")
@@ -248,12 +332,26 @@ def main(config_path: str):
     pipeline = DSM_EDA_Pipeline(n=N, population_size=POP_SIZE, selection_size=SELECTION_SIZE, learning_method=LEARNING_METHOD, gen_log_file=gen_log_file)
 
     if LEARNING_METHOD == LearningStrategy.PBIL:
-        pipeline.pbil_learning_rate = pbil_cfg.get("learning_rate", 0.1)
-        pipeline.pbil_mutation_rate = pbil_cfg.get("mutation_rate", 0.01)
+        pipeline.pbil_alpha = pbil_cfg.get("alpha", 0.1)
     if LEARNING_METHOD == LearningStrategy.BIRKHOFF:
         pipeline.birkhoff_alpha = birkhoff_cfg.get("alpha", 0.1)
 
-    best_p, best_f = pipeline.run(epsilon=EPSILON, generations=GENERATIONS, num_workers=WORKERS)
+    pipeline.time_limit = TIME_LIMIT
+    pipeline.svd_enabled = svd_cfg.get("enabled", False)
+    pipeline.svd_theta = svd_cfg.get("theta", 0.3)
+    pipeline.svd_every = svd_cfg.get("apply_every", 1)
+    pipeline.sinkhorn_max_iter = sinkhorn_cfg.get("iterations", 10000)
+
+    if warm_start_cfg.get("enabled", False):
+        pipeline.warm_start(
+            alpha0=warm_start_cfg.get("alpha0", 0.3),
+            shift=warm_start_cfg.get("shift", 1),
+        )
+
+    best_p, best_f = pipeline.run(
+        epsilon=EPSILON, generations=GENERATIONS, num_workers=WORKERS,
+        max_duration_seconds=MAX_DURATION_SECONDS,
+    )
 
     if visualize_cfg.get("enabled", False):
         pipeline.visualize(

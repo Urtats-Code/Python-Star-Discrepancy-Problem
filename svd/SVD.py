@@ -18,12 +18,11 @@ class SVD_Noise_Injection():
     def reconstruct(self):
         return self.U @ np.diag(self.Sigma) @ self.V
 
-    def noise_injection(self, diagonal, intensity = 0.4):
-        noise = np.random.normal(0, intensity, size=diagonal.shape)
+    def noise_injection(self, diagonal, theta=0.4):
+        noise = np.random.normal(0, theta, size=diagonal.shape)
         return np.clip(diagonal + noise, a_min=0, a_max=None)
 
-    def inject(self):
+    def inject(self, theta=0.4):
         self.decompose()
-        self.Sigma = self.noise_injection(self.Sigma)
+        self.Sigma = self.noise_injection(self.Sigma, theta=theta)
         return self.reconstruct()
-        

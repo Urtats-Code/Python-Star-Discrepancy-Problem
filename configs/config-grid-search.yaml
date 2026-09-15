@@ -9,11 +9,20 @@ run:
   epsilon: [0.0001]
 
 pbil:
-  learning_rate: [0.1]
-  mutation_rate: [0.01]
+  alpha: [0.1]
 
 birkhoff:
   alpha: [0.1]
+
+warm_start:
+  enabled: [false, true]
+  alpha0: [0.3]
+  shift: [1]
+
+svd:
+  enabled: [false, true]
+  theta: [0.3]
+  apply_every: [1]
 
 logging:
   gen_log_file: "./logs/generation_log.h5"  # base name; each run gets a unique timestamped file

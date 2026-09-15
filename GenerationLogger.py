@@ -45,6 +45,18 @@ class GenerationLogger:
         self._queue.put(None)
         self._thread.join()
 
+    def finalize(self, summary: dict) -> None:
+        """
+        Writes run-level summary data (e.g. whether the run stopped early on
+        a time budget, how many generations actually completed, total wall
+        clock). Call only after close(), once the writer thread has stopped,
+        so this doesn't race the queued generation writes.
+        """
+        with h5py.File(self._file_path, "a") as f:
+            grp = f.require_group("summary")
+            for key, value in summary.items():
+                grp.create_dataset(key, data=value)
+
     @staticmethod
     def jsonnify(h5_path: str, json_path: str = None) -> str:
         if json_path is None:

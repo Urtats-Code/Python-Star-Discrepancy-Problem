@@ -4,20 +4,25 @@ import gurobipy as gp
 from gurobipy import GRB
 
 class PersistentSDPProblem:
-    def __init__(self, n, epsilon):
+    def __init__(self, n, epsilon, time_limit=None):
         self.n = n
         self.epsilon = epsilon
-        
+
         # Start isolated environment
         self.env = gp.Env(empty=True)
         self.env.setParam("OutputFlag", 0)
         self.env.start()
-        
+
         # Build persistent model
         self.model = gp.Model("SDP_Persistent", env=self.env)
         self.model.Params.NonConvex = 2
         self.model.Params.MIPGap = 0.0
         self.model.Params.Threads = 1  # Limit internal threads since we parallelize externally
+        if time_limit is not None:
+            # Proving exact optimality on every fitted permutation is the
+            # bottleneck of the whole EDA loop; without a cap this can hang
+            # for minutes to hours as n grows (see [CDKP23], [CDKP24]).
+            self.model.Params.TimeLimit = time_limit
         
         # Static variables
         self.f = self.model.addVar(lb=1.0/n, name="f")
@@ -76,6 +81,11 @@ class PersistentSDPProblem:
 
         # 5. Solve and return
         self.model.optimize()
-        if self.model.Status == GRB.OPTIMAL:
+        # With a TimeLimit set, Gurobi may stop before proving optimality
+        # (Status == TIME_LIMIT) while still holding a feasible incumbent.
+        # Returning that incumbent is what makes the time limit useful at
+        # all; checking only for GRB.OPTIMAL would score every capped
+        # evaluation as infinitely bad.
+        if self.model.SolCount > 0:
             return self.model.ObjVal
         return float('inf')

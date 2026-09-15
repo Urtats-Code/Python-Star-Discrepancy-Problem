@@ -8,16 +8,29 @@ run:
   generations: 500
   epsilon: 0.0001
   num_workers: null
+  time_limit: null            # seconds per Gurobi evaluation; null = solve to proven optimality (can be very slow for larger n)
+  max_duration_seconds: null  # wall-clock budget for the whole training run; null = run all `generations`.
+                              # When reached, the generation loop stops cleanly (no kill) and the current
+                              # best DSM, best solution, and every completed generation stay logged to gen_log_file.
 
 pbil:
-  learning_rate: 0.1
-  mutation_rate: 0.01
+  alpha: 0.1  # smoothing factor in M^(t+1) = M^t*(1-alpha) + Mhat*alpha (eq:pbil_learning)
 
 birkhoff:
   alpha: 0.1
 
+warm_start:
+  enabled: false
+  alpha0: 0.3  # mixing weight in M^(0) = alpha0*Ubar + (1-alpha0)*P_sigma0 (eq:warm_start)
+  shift: 1     # starting index offset for the Fibonacci/Kronecker sequence
+
+svd:
+  enabled: false
+  theta: 0.3       # noise standard deviation injected into the singular values (eq:svd_noise)
+  apply_every: 1   # apply the perturbation every N generations
+
 sinkhorn:
-  iterations: 10
+  iterations: 10000
 
 logging:
   gen_log_file: "./logs/generation_log.h5"   # Path where per-generation data will be written (HDF5)

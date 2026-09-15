@@ -1,0 +1,43 @@
+pipeline:
+  n: 8
+  population_size: 200
+  selection_size: 25 # percentage of population (e.g. 10 = 10%)
+  learning_method: "birkhoff"
+
+run:
+  generations: 500
+  epsilon: 0.0001
+  num_workers: null
+  time_limit: null           # n=8 solves to proven optimality in well under a second per permutation, no cap needed
+  max_duration_seconds: 90   # smoke-test budget: stop cleanly after 90s regardless of how many of the 500 generations completed
+
+pbil:
+  alpha: 0.1
+
+birkhoff:
+  alpha: 0.1
+
+warm_start:
+  enabled: false
+  alpha0: 0.3
+  shift: 1
+
+svd:
+  enabled: false
+  theta: 0.3
+  apply_every: 1
+
+sinkhorn:
+  iterations: 10000
+
+logging:
+  gen_log_file: "./logs/smoke_test_log.h5"
+
+visualization:
+  enabled: true
+  output_dir: "plots/smoke_test"
+  plot_fitness: true
+  plot_dsm: true
+  plot_combined: true
+  save_animation: false
+  save_combined_animation: false
