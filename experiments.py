@@ -168,6 +168,9 @@ def main():
         description="Grid sweep over all implemented DSM-EDA configurations (dimension 2).",
     )
     parser.add_argument("--n-values", default="20,50,100,180", help="Comma-separated list of n values.")
+    parser.add_argument("--long", action="store_true",
+                         help="Long-run preset: n in {20,50}, 500 generations, "
+                              "output/logs go to results/experiments_long and logs/experiments_long.")
     parser.add_argument("--generations", type=int, default=60)
     parser.add_argument("--population-size", type=int, default=60)
     parser.add_argument("--selection-size", type=int, default=25, help="Percent of population kept as elite.")
@@ -188,6 +191,17 @@ def main():
                          help="Tiny smoke test (n=20, 1 config, 3 generations) to validate "
                               "wiring and estimate per-evaluation solve time before the full grid.")
     args = parser.parse_args()
+
+    # --long overrides output/log paths and key hyperparameters
+    if args.long:
+        if args.output == "results/experiments_dim2.csv":
+            args.output = "results/experiments_long/experiments_long.csv"
+        if args.log_dir == "logs/experiments":
+            args.log_dir = "logs/experiments_long"
+        if args.n_values == "20,50,100,180":
+            args.n_values = "20,25"
+        if args.generations == 60:
+            args.generations = 500
 
     workers = args.workers or max(1, (os.cpu_count() or 2) - 1)
     os.makedirs(args.log_dir, exist_ok=True)

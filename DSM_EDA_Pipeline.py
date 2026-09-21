@@ -169,8 +169,14 @@ class DSM_EDA_Pipeline:
         perm = np.zeros(self.n, dtype=int)
         available_cols = list(range(self.n))
         for i in range(self.n):
-            probs = self.dsm[i, available_cols]
-            probs /= (probs.sum() + 1e-15)
+            probs = self.dsm[i, available_cols].copy()
+            probs = np.nan_to_num(probs, nan=0.0, posinf=0.0, neginf=0.0)
+            probs = np.clip(probs, a_min=0.0, a_max=None)
+            total = probs.sum()
+            if total <= 0.0:
+                probs = np.ones(len(available_cols)) / len(available_cols)
+            else:
+                probs /= total
             choice_idx = np.random.choice(len(available_cols), p=probs)
             perm[i] = available_cols.pop(choice_idx) + 1
         return perm

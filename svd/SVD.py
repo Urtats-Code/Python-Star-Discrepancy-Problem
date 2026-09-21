@@ -16,7 +16,9 @@ class SVD_Noise_Injection():
         self.U, self.Sigma, self.V = np.linalg.svd(self.DSM, full_matrices=False)
 
     def reconstruct(self):
-        return self.U @ np.diag(self.Sigma) @ self.V
+        result = self.U @ np.diag(self.Sigma) @ self.V
+        result = np.nan_to_num(result, nan=0.0, posinf=0.0, neginf=0.0)
+        return np.clip(result, a_min=0.0, a_max=None)
 
     def noise_injection(self, diagonal, theta=0.4):
         noise = np.random.normal(0, theta, size=diagonal.shape)
