@@ -7,8 +7,7 @@ permutation is scored by fixing it in a Gurobi continuous NLP that optimizes
 the coordinates (`PersistentSDPSolver.py`).
 
 This README covers environment setup on both **Windows** and **macOS**, the
-configuration options, and how to run the pipeline, the smoke test, and the
-experiment grid sweep.
+configuration system, and how to run every experiment in the project.
 
 ---
 
@@ -110,100 +109,287 @@ every run in this repo calls Gurobi on every evaluated permutation.
 
 ## 5. Configuration files
 
-All runs are driven by a YAML config under `configs/`. Key sections
-(see `configs/config.yaml` for the full commented reference):
+All single-run experiments are driven by a YAML config under `configs/`.
+Three pre-built configs are provided:
 
-| Section | Key | Meaning |
-|---|---|---|
-| `pipeline` | `n` | Number of points (dimension-2 SDP instance size). |
-| | `population_size` | EDA population size $\lambda$. |
-| | `selection_size` | Elite size as a **percentage** of the population (e.g. `25` = top 25%). |
-| | `learning_method` | `"birkhoff"` or `"pbil"`. |
-| `run` | `generations` | Max number of generations to run. |
-| | `epsilon` | Minimum coordinate spacing in the Step-2 NLP. |
-| | `num_workers` | CPU worker processes for parallel evaluation; `null` = `cpu_count() - 1`. |
-| | `time_limit` | Per-permutation Gurobi solve cap, in seconds. `null` = solve to proven optimality (fine for small `n`, can be very slow for large `n`). |
-| | `max_duration_seconds` | Wall-clock budget for the **whole training run**. When reached, the generation loop stops cleanly (no kill) and keeps the current best DSM/solution and every completed generation already logged. `null` = run all `generations`. |
-| `birkhoff` | `alpha` | Exploration weight in the Birkhoff update rule. |
-| `pbil` | `alpha` | Smoothing factor toward the best-so-far solution. |
-| `warm_start` | `enabled` | Bias $M^{(0)}$ toward a Fibonacci-pattern permutation instead of a uniform start. |
-| | `alpha0`, `shift` | Mixing weight and Fibonacci-sequence shift. |
-| `svd` | `enabled` | Apply SVD noise-injection perturbation each generation to counter premature convergence. |
-| | `theta`, `apply_every` | Noise intensity and how often (in generations) to apply it. |
-| `logging` | `gen_log_file` | Path to the per-generation HDF5 log. |
-| `visualization` | `enabled`, ... | Whether/what plots to generate after the run. |
+| File | Purpose |
+|---|---|
+| `configs/config.yaml` | Full run: `n=8`, 500 generations, no time limit. |
+| `configs/config-smoke-test.yaml` | Quick validation: same as above but capped at 90 s wall-clock. |
+| `configs/config-grid-search.yaml` | Reference showing the hyperparameter search space (lists per field). |
 
-Both commands below (macOS and Windows) are otherwise identical once the
-venv is active — only the activation step above differs.
+### 5.1 Configuration sections and keys
+
+| Section | Key | Type | Meaning |
+|---|---|---|---|
+| `pipeline` | `n` | int | Number of points (SDP instance size). |
+| | `population_size` | int | EDA population size λ. |
+| | `selection_size` | int | Elite size as a **percentage** of the population (e.g. `25` = top 25 %). |
+| | `learning_method` | str | `"birkhoff"` or `"pbil"`. |
+| `run` | `generations` | int | Maximum number of generations to run. |
+| | `epsilon` | float | Minimum coordinate spacing in the Step-2 NLP (default `0.0001`). |
+| | `num_workers` | int \| null | CPU worker processes for parallel evaluation; `null` = `cpu_count() − 1`. |
+| | `time_limit` | float \| null | Per-permutation Gurobi solve cap in seconds. `null` = solve to proven optimality (fine for small `n`, very slow for large `n`). |
+| | `max_duration_seconds` | float \| null | Wall-clock budget for the **whole run**. When reached, the generation loop stops cleanly and keeps the current best DSM/solution and all completed generations in the log. `null` = run all `generations`. |
+| `birkhoff` | `alpha` | float | Learning rate for the Birkhoff DSM update (default `0.1`). |
+| `pbil` | `alpha` | float | Smoothing factor toward the best-so-far solution in PBIL (default `0.1`). |
+| `warm_start` | `enabled` | bool | Bias the initial DSM toward a Fibonacci-pattern permutation instead of a uniform start. |
+| | `alpha0` | float | Mixing weight in M⁰ = α₀ · Ū + (1−α₀) · P_σ₀ (default `0.3`). |
+| | `shift` | int | Starting index offset for the Fibonacci sequence (default `1`). |
+| `svd` | `enabled` | bool | Apply SVD noise-injection perturbation each generation to counter premature convergence. |
+| | `theta` | float | Standard deviation of the noise added to singular values (default `0.3`). |
+| | `apply_every` | int | Apply the perturbation every N generations (default `1`). |
+| `sinkhorn` | `iterations` | int | Maximum Sinkhorn-Knopp iterations to restore doubly stochasticity (default `10000`). |
+| `logging` | `gen_log_file` | str | Path where the per-generation HDF5 log is written. |
+| `visualization` | `enabled` | bool | Whether to generate plots after the run. |
+| | `output_dir` | str | Directory where plots are saved. |
+| | `plot_fitness` | bool | Fitness evolution line chart. |
+| | `plot_dsm` | bool | Final DSM heatmap. |
+| | `plot_combined` | bool | Fitness curve + DSM side-by-side. |
+| | `save_animation` | bool | Animated MP4 of DSM evolution. |
+| | `save_combined_animation` | bool | Animated MP4 of fitness + DSM combined. |
 
 ---
 
-## 6. Running the pipeline
+## 6. Running the pipeline (single run)
 
 ```bash
 python DSM_EDA_Pipeline.py --config configs/config.yaml
 ```
 
-This prints per-generation progress (`Gen 000 | Best Fitness: ... |
-Diversity: ...`), then a final best permutation/fitness summary. Results are
-logged to the HDF5 file named in `logging.gen_log_file`, and (if
-`visualization.enabled: true`) plots are written to `visualization.output_dir`.
+This prints per-generation progress (`Gen 000 | Best Fitness: ... | Diversity: ...`),
+then a final best permutation/fitness summary. Results are logged to the HDF5
+file named in `logging.gen_log_file`, and — if `visualization.enabled: true` —
+plots are written to `visualization.output_dir`.
 
-### Smoke test
+### 6.1 Smoke test
 
 `configs/config-smoke-test.yaml` mirrors a full-size config (`n=8`,
 `generations=500`, `population_size=200`) but caps the run at
-`max_duration_seconds: 90`, so it validates the whole pipeline quickly:
+`max_duration_seconds: 90` so it validates the whole pipeline quickly:
 
 ```bash
 python DSM_EDA_Pipeline.py --config configs/config-smoke-test.yaml
 ```
 
-Check whether it completed all generations or stopped on the time budget:
+The log is written to `logs/smoke_test_log.h5` and plots go to `plots/smoke_test/`
+(static images only — MP4 animations are disabled).
+
+Inspect the result to check whether all generations completed or the run hit
+the time budget:
 
 ```bash
 python generation_jsonify.py --file logs/smoke_test_log.h5
-# then inspect the "summary" section of the printed JSON, in particular
-# "stopped_early" and "generations_completed"
+# look at the "summary" section: "stopped_early" and "generations_completed"
 ```
 
 ---
 
 ## 7. Running the experiment grid (`experiments.py`)
 
-Sweeps every implemented configuration axis (Birkhoff/PBIL × cold/warm start
-× SVD-noise on/off) across a list of `n` values in dimension 2:
+`experiments.py` runs a systematic **2×2×2 grid** of configurations:
+
+- **Learning method**: Birkhoff vs PBIL
+- **Initialisation**: cold start (uniform DSM) vs warm start (Fibonacci-biased DSM)
+- **Exploration**: no SVD noise vs SVD noise injection
+
+That gives 8 configurations, each run across a list of `n` values.
+
+### 7.1 Quick wiring check
 
 ```bash
-# quick wiring check first (n=20, 1 config, 3 generations):
 python experiments.py --dry-run
+```
 
-# full grid (defaults to n = 20, 50, 100, 180 — 8 configs each):
+Runs one configuration at `n=20` for 3 generations to confirm the pipeline
+wires up correctly before committing to a long sweep.
+
+### 7.2 Full grid sweep
+
+```bash
 python experiments.py --output results/experiments_dim2.csv
 ```
 
-Useful flags: `--n-values 20,50`, `--generations`, `--population-size`,
-`--selection-size`, `--workers`, `--time-limit` (per-evaluation Gurobi cap),
-`--max-duration` (wall-clock cap per run), `--repeats` (independent reruns
-per configuration). Results are appended to the output CSV as each run
-finishes, so an interrupted sweep keeps whatever it already completed.
+Defaults: `n ∈ {20, 50, 100, 180}`, 8 configurations each — 32 runs total.
+Results are **appended** to the CSV as each run finishes, so an interrupted
+sweep keeps whatever it already completed.
 
-Per-run HDF5 logs land under `logs/experiments/` by default
-(`--log-dir` to change it).
+### 7.3 Long-run preset
+
+```bash
+python experiments.py --long
+```
+
+Preset for 500-generation runs at `n ∈ {20, 25}`. Logs go to
+`logs/experiments_long/` and results to `results/experiments_long/experiments_long.csv`.
+
+### 7.4 Custom sweep
+
+```bash
+python experiments.py \
+  --n-values 20,50 \
+  --generations 60 \
+  --population-size 60 \
+  --selection-size 25 \
+  --workers 4 \
+  --time-limit 15 \
+  --max-duration 3600 \
+  --repeats 3 \
+  --seed 42 \
+  --log-dir logs/my_experiment \
+  --output results/my_experiment.csv
+```
+
+### 7.5 Available flags
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `--n-values` | `20,50,100,180` | Comma-separated list of `n` values to sweep. |
+| `--generations` | 60 | Generations per run. |
+| `--population-size` | 60 | EDA population size λ. |
+| `--selection-size` | 25 | Elite percentage (0–100). |
+| `--workers` | `cpu_count() − 1` | Parallel CPU worker processes. |
+| `--time-limit` | `15.0` | Per-evaluation Gurobi cap in seconds. |
+| `--max-duration` | `None` | Wall-clock budget per run in seconds. |
+| `--repeats` | 1 | Independent reruns per configuration. |
+| `--seed` | 0 | Base random seed (incremented per run). |
+| `--log-dir` | `logs/experiments` | Directory for per-run HDF5 logs. |
+| `--output` | — | CSV file to append results to. |
+| `--long` | — | Preset: 500 gens, `n ∈ {20, 25}`, long-run paths. |
+| `--dry-run` | — | 3 gens, pop=10, one config — wiring check only. |
+
+### 7.6 Output
+
+- **CSV**: one row per run with `n`, `learning_method`, `warm_start`, `svd_noise`,
+  `repeat`, `population_size`, `selection_size_pct`, `generations`, `time_limit`,
+  `workers`, `best_fitness`, `wall_clock_seconds`, `log_file`.
+- **HDF5 logs**: `logs/experiments/n{n}_{method}_{warm|cold}_{svd|nosvd}_r{repeat}.h5`
+
+### 7.7 Plotting grid results
+
+```bash
+python plot_experiments.py
+# or with explicit paths:
+python plot_experiments.py \
+  --csv results/experiments_dim2.csv \
+  --log-dir logs/experiments \
+  --out-dir plots/experiments
+```
+
+Produces four plot types: best-fitness bar charts by `n`, fitness convergence
+curves per `n`, Hamming diversity curves per `n`, and a summary heatmap
+(learning method × `n`, split by warm start / SVD noise).
+
+For long-run results:
+
+```bash
+python plot_experiments_long.py \
+  --csv results/experiments_long/experiments_long.csv \
+  --log-dir logs/experiments_long \
+  --out-dir plots/experiments_long
+```
 
 ---
 
-## 8. Inspecting results
+## 8. Running the cache experiment (`experiments_cache.py`)
 
-- `python generation_jsonify.py --file <path>.h5` converts a log to JSON for
-  quick inspection.
-- `Visualize` (used internally by `pipeline.visualize(...)`) can plot best-
-  fitness curves, the final DSM, and combined/animated views from a log
-  file; see `Visualize.py` for the individual plotting methods.
+Tracks permutation **cache hit rate** per generation to measure how much
+caching reduces Gurobi calls. Only two configurations are compared:
+
+- Birkhoff + warm start (no SVD)
+- PBIL + warm start (no SVD)
+
+### 8.1 Basic usage
+
+```bash
+python experiments_cache.py
+```
+
+Defaults: `n=50`, 500 generations, population size 50, 1 repeat,
+`time_limit=15 s` per evaluation.
+
+### 8.2 Quick wiring check
+
+```bash
+python experiments_cache.py --dry-run
+```
+
+Runs 3 generations with population 10 to verify wiring.
+
+### 8.3 Custom run
+
+```bash
+python experiments_cache.py \
+  --n 50 \
+  --generations 500 \
+  --population-size 50 \
+  --selection-size 25 \
+  --workers 4 \
+  --time-limit 15 \
+  --repeats 3 \
+  --seed 0 \
+  --log-dir logs/cache_experiment \
+  --output results/cache_experiment/results.csv
+```
+
+### 8.4 Available flags
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `--n` | 50 | Problem dimension. |
+| `--generations` | 500 | Generations per run. |
+| `--population-size` | 50 | EDA population size λ. |
+| `--selection-size` | 25 | Elite percentage. |
+| `--workers` | `cpu_count() − 1` | Parallel CPU workers. |
+| `--time-limit` | 15.0 | Per-evaluation Gurobi cap in seconds. |
+| `--repeats` | 1 | Independent reruns per configuration. |
+| `--max-duration` | `None` | Wall-clock budget per run in seconds. |
+| `--seed` | 0 | Base random seed. |
+| `--log-dir` | `logs/cache_experiment` | Directory for HDF5 logs. |
+| `--output` | `results/cache_experiment/results.csv` | Summary CSV path. |
+| `--dry-run` | — | 3 gens, pop=10 — wiring check only. |
+
+### 8.5 Output
+
+- **Summary CSV** (`results/cache_experiment/results.csv`): one row per run with
+  `best_fitness`, `wall_clock_seconds`, `cache_hit_rate_mean`, `cache_hit_rate_std`,
+  `total_evaluations` (Gurobi calls), and `total_cache_hits`.
+- **Per-generation CSV** (`results/cache_experiment/cache_hit_rate_per_generation.csv`):
+  one row per generation with `generation`, `learning_method`, `warm_start`,
+  `repeat`, and `cache_hit_rate`.
+- **HDF5 logs**: `logs/cache_experiment/n{n}_{method}_{warm|cold}_nosvd_r{repeat}.h5`
+
+### 8.6 Plotting cache results
+
+```bash
+python plot_experiments_cache.py
+# or with explicit paths:
+python plot_experiments_cache.py \
+  --csv results/cache_experiment/results.csv \
+  --per-gen-csv results/cache_experiment/cache_hit_rate_per_generation.csv \
+  --out-dir plots/cache_experiment
+```
 
 ---
 
-## 9. Running the tests
+## 9. Inspecting HDF5 logs
+
+Convert any HDF5 log to JSON for quick inspection:
+
+```bash
+python generation_jsonify.py --file logs/generation_log.h5
+```
+
+Each log contains:
+- **`metadata/`** — run parameters (`n`, `population_size`, `learning_method`, etc.)
+- **`generation_NNNNNN/`** — per-generation arrays: `population`, `fitness`,
+  `best_fitness`, `dsm`, and `diversity/` (Hamming distance statistics).
+- **`summary/`** (written after the run) — `stopped_early`, `generations_requested`,
+  `generations_completed`, `wall_clock_seconds`, `final_best_fitness`.
+
+---
+
+## 10. Running the tests
 
 ```bash
 pytest tests/
@@ -213,7 +399,7 @@ Works identically on both platforms once the venv is active.
 
 ---
 
-## 10. Troubleshooting
+## 11. Troubleshooting
 
 - **`ImportError: DLL load failed` / missing `.so` on import** — you're
   likely using a `venv/` created on the other OS. Delete it and recreate per
@@ -222,7 +408,8 @@ Works identically on both platforms once the venv is active.
 - **A run seems stuck** — for larger `n`, each permutation evaluation is a
   nonconvex QCQP; without `run.time_limit` set, Gurobi tries to prove exact
   global optimality, which grows very slowly with `n`. Set `time_limit` (per
-  evaluation) and/or `max_duration_seconds` (for the whole run) in your config.
+  evaluation) and/or `max_duration_seconds` (for the whole run) in your config,
+  or use `--time-limit` / `--max-duration` flags in the experiment scripts.
 - **GPU** — this pipeline does not use one. The bottleneck is Gurobi's
   per-permutation CPU solve; the parallelism that helps is
-  `run.num_workers` / `experiments.py --workers`, not a GPU.
+  `run.num_workers` / `--workers`, not a GPU.
